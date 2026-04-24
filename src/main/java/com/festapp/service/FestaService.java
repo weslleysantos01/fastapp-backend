@@ -13,16 +13,17 @@ public class FestaService {
     @Autowired
     private FestaRepository festaRepository;
 
-    public List<Festa> listarTodas() {
-        return festaRepository.findAll();
+    public List<Festa> listarTodas(Long empresaId) {
+        return festaRepository.findByEmpresaId(empresaId);
     }
 
-    public Festa cadastrar(Festa festa) {
+    public Festa cadastrar(Festa festa, Long empresaId) {
+        festa.setEmpresaId(empresaId);
         return festaRepository.save(festa);
     }
 
-    public Festa buscarPorId(Long id) {
-        return festaRepository.findById(id)
+    public Festa buscarPorId(Long id, Long empresaId) {
+        return festaRepository.findByIdAndEmpresaId(id, empresaId)
                 .orElseThrow(() -> new RuntimeException("Festa não encontrada"));
     }
 }

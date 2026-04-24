@@ -1,18 +1,21 @@
 package com.festapp.service;
 
-import com.festapp.model.Escala;
-import com.festapp.model.Festa;
-import com.festapp.model.Funcionario;
+import com.festapp.model.*;
 import com.festapp.repository.EscalaRepository;
 import com.festapp.repository.FestaRepository;
 import com.festapp.repository.FuncionarioRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 public class EscalaService {
+
+    @Autowired
+    private EscalaRepository escalaRepository;
 
     @Autowired
     private FuncionarioRepository funcionarioRepository;
@@ -20,45 +23,62 @@ public class EscalaService {
     @Autowired
     private FestaRepository festaRepository;
 
-    @Autowired
-    private EscalaRepository escalaRepository;
+    public List<Escala> listarPorFesta(Long festaId, Long empresaId) {
+        return escalaRepository.findByFestaId(festaId).stream()
+                .filter(e -> e.getFesta().getEmpresaId().equals(empresaId))
+                .collect(Collectors.toList());
+    }
 
-    public List<Escala> alocarEquipe(Long festaId) {
-
-        // Busca a festa
-        Festa festa = festaRepository.findById(festaId)
+    @Transactional
+    public Escala adicionarFuncionario(Long festaId, Long funcionarioId, Long empresaId) {
+        Festa festa = festaRepository.findByIdAndEmpresaId(festaId, empresaId)
                 .orElseThrow(() -> new RuntimeException("Festa não encontrada"));
 
-        // Busca funcionários disponíveis com menos de 2 festas hoje
-        List<Funcionario> disponiveis = funcionarioRepository
-                .findByDisponivelTrueAndFestaHojeLessThan(2);
+        Funcionario func = funcionarioRepository.findByIdAndEmpresaId(funcionarioId, empresaId)
+                .orElseThrow(() -> new RuntimeException("Funcionário não encontrado"));
 
-        // Ordena por quem tem menos festas no dia
-        disponiveis.sort((a, b) -> a.getFestaHoje() - b.getFestaHoje());
-
-        // Verifica se tem gente suficiente
-        if (disponiveis.size() < festa.getQtdFuncionarios()) {
-            throw new RuntimeException("Funcionários insuficientes! Disponíveis: "
-                    + disponiveis.size() + ", Necessários: " + festa.getQtdFuncionarios());
+        // Regra de Negócio: Funcionário precisa estar ATIVO (usando Enum)
+        if (func.getStatusCadastro() != StatusCadastro.ATIVO) {
+            throw new RuntimeException("Funcionário com cadastro pendente ou inativo");
         }
 
-        // Seleciona os primeiros da lista
-        List<Funcionario> selecionados = disponiveis.subList(0, festa.getQtdFuncionarios());
-
-        // Cria as escalas e atualiza o contador de cada funcionário
-        for (Funcionario f : selecionados) {
-            Escala escala = new Escala();
-            escala.setFesta(festa);
-            escala.setFuncionario(f);
-            escalaRepository.save(escala);
-
-            f.setFestaHoje(f.getFestaHoje() + 1);
-            funcionarioRepository.save(f);
+        // Regra: Não escala quem já está ocupado ou em folga
+        if (func.getStatusDia() == StatusDia.OCUPADO || func.getStatusDia() == StatusDia.FOLGA) {
+            throw new RuntimeException("Funcionário indisponível para este dia");
         }
 
-        festa.setStatus("ESCALADA");
-        festaRepository.save(festa);
+        Escala escala = new Escala();
+        escala.setFesta(festa);
+        escala.setFuncionario(func);
 
-        return escalaRepository.findByFestaId(festaId);
+        // Atualiza status do funcionário para OCUPADO
+        func.setStatusDia(StatusDia.OCUPADO);
+        func.setFestasNoDia(func.getFestasNoDia() + 1);
+        funcionarioRepository.save(func);
+
+        return escalaRepository.save(escala);
+    }
+
+    @Transactional
+    public void removerFuncionario(Long escalaId, Long empresaId) {
+        Escala escala = escalaRepository.findById(escalaId)
+                .orElseThrow(() -> new RuntimeException("Escala não encontrada"));
+
+        if (!escala.getFesta().getEmpresaId().equals(empresaId)) {
+            throw new RuntimeException("Não autorizado");
+        }
+
+        Funcionario func = escala.getFuncionario();
+
+        // Se for a última festa dele no dia, volta para DISPONIVEL
+        if (func.getFestasNoDia() <= 1) {
+            func.setStatusDia(StatusDia.DISPONIVEL);
+            func.setFestasNoDia(0);
+        } else {
+            func.setFestasNoDia(func.getFestasNoDia() - 1);
+        }
+
+        funcionarioRepository.save(func);
+        escalaRepository.delete(escala);
     }
 }

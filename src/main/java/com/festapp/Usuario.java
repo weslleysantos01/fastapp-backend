@@ -3,6 +3,7 @@ package com.festapp.model;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.*;
 import lombok.Data;
+import java.util.UUID;
 
 @Data
 @Entity
@@ -10,24 +11,25 @@ import lombok.Data;
 public class Usuario {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    private UUID id; // UUID do Supabase Auth
 
-    @NotBlank(message = "Nome é obrigatório")
-    @Size(min = 2, max = 100, message = "Nome deve ter entre 2 e 100 caracteres")
+    @NotBlank
+    @Size(min = 2, max = 255)
     private String nome;
 
-    @NotBlank(message = "Email é obrigatório")
-    @Email(message = "Email inválido")
+    @NotBlank
+    @Email
+    @Column(unique = true)
     private String email;
 
-    @NotBlank(message = "Senha é obrigatória")
-    @Size(min = 6, message = "Senha deve ter no mínimo 6 caracteres")
-    private String senha;
-
-    @NotBlank(message = "Perfil é obrigatório")
-    @Pattern(regexp = "DONA|FUNCIONARIO", message = "Perfil deve ser DONA ou FUNCIONARIO")
+    @NotBlank
+    @Pattern(regexp = "DONA|FUNCIONARIO")
     private String perfil;
+
+    @Column(name = "empresa_id", nullable = false)
+    private Long empresaId;
+
+    private Boolean ativo = true;
 
     @OneToOne
     @JoinColumn(name = "funcionario_id")

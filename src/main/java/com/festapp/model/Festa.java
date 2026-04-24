@@ -4,7 +4,6 @@ import jakarta.persistence.*;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 import java.time.LocalDateTime;
-import java.util.List;
 
 @Data
 @Entity
@@ -15,25 +14,29 @@ public class Festa {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @NotBlank(message = "Nome é obrigatório")
-    @Size(min = 2, max = 100, message = "Nome deve ter entre 2 e 100 caracteres")
-    private String nome;
+    @Column(name = "tem_barraca", columnDefinition = "BOOLEAN DEFAULT FALSE")
+    private boolean temBarraca = false;
 
-    @NotNull(message = "Horário é obrigatório")
-    @Future(message = "Horário deve ser no futuro")
-    private LocalDateTime horario;
+    @Column(name = "empresa_id", nullable = false)
+    private Long empresaId;
 
-    @Min(value = 1, message = "Mínimo de 1 funcionário por festa")
-    @Max(value = 20, message = "Máximo de 20 funcionários por festa")
-    private int qtdFuncionarios;
+    @NotBlank(message = "Nome do cliente é obrigatório")
+    @Column(name = "nome_cliente")
+    private String nomeCliente;
 
-    private String status = "AGUARDANDO";
+    @NotNull(message = "Data e horário são obrigatórios")
+    @Column(name = "data_hora")
+    private LocalDateTime dataHora;
 
-    @ManyToMany
-    @JoinTable(
-            name = "escalas",
-            joinColumns = @JoinColumn(name = "festa_id"),
-            inverseJoinColumns = @JoinColumn(name = "funcionario_id")
-    )
-    private List<Funcionario> funcionariosEscalados;
+    @Min(1) @Max(12)
+    @Column(name = "duracao_horas", columnDefinition = "INT DEFAULT 4")
+    private int duracaoHoras = 4;
+
+    private String endereco;
+
+    @Min(1)
+    @Column(name = "qtd_funcionarios_necessarios", columnDefinition = "INT DEFAULT 1")
+    private int qtdFuncionariosNecessarios = 1;
+
+    private String status = "AGENDADA";
 }

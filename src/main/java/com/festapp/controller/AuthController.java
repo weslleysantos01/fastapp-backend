@@ -1,18 +1,20 @@
 package com.festapp.controller;
 
+import com.festapp.model.Empresa;
 import com.festapp.model.Usuario;
+import com.festapp.repository.EmpresaRepository;
 import com.festapp.repository.UsuarioRepository;
-import com.festapp.security.JwtUtil;
-import com.festapp.security.SecurityLogger;
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.*;
 import lombok.Data;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.ResponseEntity;
-import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.client.RestTemplate;
 
-import java.util.Optional;
+import java.util.*;
 
 @RestController
 @RequestMapping("/auth")
@@ -20,77 +22,133 @@ import java.util.Optional;
 public class AuthController {
 
     @Autowired
+    private EmpresaRepository empresaRepository;
+
+    @Autowired
     private UsuarioRepository usuarioRepository;
 
-    @Autowired
-    private JwtUtil jwtUtil;
+    @Value("${supabase.url}")
+    private String supabaseUrl;
 
-    @Autowired
-    private PasswordEncoder passwordEncoder;
+    @Value("${supabase.service.role.key}")
+    private String supabaseServiceKey;
 
-    @Autowired
-    private SecurityLogger securityLogger;
+    @GetMapping("/me")
+    public ResponseEntity<?> me() {
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
 
-    @PostMapping("/login")
-    public ResponseEntity<?> login(@RequestBody LoginRequest request,
-                                   HttpServletRequest httpRequest) {
-        String ip = httpRequest.getRemoteAddr();
+        return empresaRepository.findByEmail(email)
+                .map(empresa -> ResponseEntity.ok(Map.of(
+                        "plano", empresa.getPlano().name(),
+                        "statusAssinatura", empresa.getStatusAssinatura().name()
+                )))
+                .orElse(ResponseEntity.status(404).build());
+    }
 
-        Optional<Usuario> usuarioOpt = usuarioRepository.findByEmail(request.getEmail());
+    @PostMapping("/cadastrar")
+    public ResponseEntity<?> cadastrar(@Valid @RequestBody CadastroRequest request) {
 
-        if (usuarioOpt.isEmpty()) {
-            securityLogger.loginFalhou(request.getEmail(), ip);
-            return ResponseEntity.status(401).body("Usuário não encontrado");
+        // Validação básica de senha
+        if (request.getSenha().length() < 6) {
+            return ResponseEntity.badRequest().body(Map.of("erro", "Senha fraca"));
         }
 
-        Usuario usuario = usuarioOpt.get();
-
-        if (!passwordEncoder.matches(request.getSenha(), usuario.getSenha())) {
-            securityLogger.loginFalhou(request.getEmail(), ip);
-            return ResponseEntity.status(401).body("Senha incorreta");
+        // Verifica duplicidade
+        if (usuarioRepository.findByEmail(request.getEmail()).isPresent()
+                || empresaRepository.existsByEmail(request.getEmail())) {
+            return ResponseEntity.status(400).body(Map.of("erro", "Email já cadastrado"));
         }
 
-        String token = jwtUtil.gerarToken(usuario.getEmail(), usuario.getPerfil());
-        securityLogger.loginSucesso(usuario.getEmail(), ip);
+        // Cria empresa
+        Empresa empresa = new Empresa();
+        empresa.setNome(request.getNomeEmpresa());
+        empresa.setEmail(request.getEmail());
+        empresa.setTelefone(request.getTelefone());
+        empresa = empresaRepository.save(empresa);
 
-        return ResponseEntity.ok(new LoginResponse(
-                token,
-                usuario.getPerfil(),
-                usuario.getNome(),
-                usuario.getId(),
-                usuario.getFuncionario() != null ? usuario.getFuncionario().getId() : null
+        RestTemplate restTemplate = new RestTemplate();
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(supabaseServiceKey);
+        headers.set("apikey", supabaseServiceKey);
+
+        Map<String, Object> appMetadata = new HashMap<>();
+        appMetadata.put("empresa_id", empresa.getId());
+        appMetadata.put("perfil", "DONA");
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("email", request.getEmail());
+        body.put("password", request.getSenha());
+        body.put("app_metadata", appMetadata);
+        body.put("email_confirm", true);
+
+        try {
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                    supabaseUrl + "/auth/v1/admin/users",
+                    new HttpEntity<>(body, headers),
+                    Map.class
+            );
+
+            // 🔒 Validação segura da resposta
+            if (response.getBody() == null || !response.getBody().containsKey("id")) {
+                empresaRepository.delete(empresa);
+                return ResponseEntity.status(500)
+                        .body(Map.of("erro", "Falha ao criar usuário externo"));
+            }
+
+            Object idObj = response.getBody().get("id");
+
+            if (!(idObj instanceof String supabaseId)) {
+                empresaRepository.delete(empresa);
+                return ResponseEntity.status(500)
+                        .body(Map.of("erro", "ID inválido retornado pelo provedor"));
+            }
+
+            // Cria usuário local
+            Usuario usuario = new Usuario();
+            usuario.setId(UUID.fromString(supabaseId));
+            usuario.setNome(request.getNomeDona());
+            usuario.setEmail(request.getEmail());
+            usuario.setPerfil("DONA");
+            usuario.setEmpresaId(empresa.getId());
+
+            usuarioRepository.save(usuario);
+
+        } catch (Exception e) {
+            empresaRepository.delete(empresa);
+
+            return ResponseEntity.status(500)
+                    .body(Map.of("erro", "Erro ao processar cadastro"));
+        }
+
+        return ResponseEntity.status(201).body(Map.of(
+                "mensagem", "Empresa cadastrada com sucesso",
+                "empresa_id", empresa.getId()
         ));
     }
-
-    @PostMapping("/registrar")
-    public ResponseEntity<?> registrar(@Valid @RequestBody Usuario usuario) {
-        if (usuarioRepository.findByEmail(usuario.getEmail()).isPresent()) {
-            return ResponseEntity.status(400).body("Email já cadastrado");
-        }
-        usuario.setSenha(passwordEncoder.encode(usuario.getSenha()));
-        return ResponseEntity.ok(usuarioRepository.save(usuario));
-    }
 }
 
 @Data
-class LoginRequest {
+class CadastroRequest {
+    @NotBlank
+    @Size(min = 2, max = 100)
+    private String nomeDona;
+
+    @NotBlank
+    @Size(min = 2, max = 255)
+    private String nomeEmpresa;
+
+    @NotBlank
+    @Email
     private String email;
+
+    @NotBlank
+    @Size(min = 6, max = 128)
     private String senha;
-}
 
-@Data
-class LoginResponse {
-    private String token;
-    private String perfil;
-    private String nome;
-    private Long usuarioId;
-    private Long funcionarioId;
+    @Size(max = 20)
+    private String telefone;
 
-    public LoginResponse(String token, String perfil, String nome, Long usuarioId, Long funcionarioId) {
-        this.token = token;
-        this.perfil = perfil;
-        this.nome = nome;
-        this.usuarioId = usuarioId;
-        this.funcionarioId = funcionarioId;
-    }
+    private String plano;
 }
